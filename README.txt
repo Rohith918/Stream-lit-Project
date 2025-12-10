@@ -69,6 +69,42 @@ Method 2: Custom Configuration
 streamlit run app.py --logger.level=debug
 
 
+===============================================================================
+DEPLOYMENT
+===============================================================================
+
+Docker (local test)
+───────────────────────────────
+docker build -t streamlit-dashboard .
+docker run -p 8501:8501 streamlit-dashboard
+
+
+Vercel (using Dockerfile)
+───────────────────────────────
+1. Push this repository to GitHub.
+2. In the Vercel dashboard choose “Import Project” → “Git Repository”.
+3. Select this repo. In “Framework preset” pick “Other”.
+4. Vercel automatically detects `vercel.json` and builds the Docker image using the included Dockerfile.
+5. No additional build command needed. The container exposes port 8501 and runs `streamlit run app.py --server.port=8501 --server.address=0.0.0.0`.
+6. Define SMTP env vars (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, EMAIL_FROM) in Vercel → Project Settings → Environment Variables before deploying.
+
+
+Streamlit Community Cloud
+───────────────────────────────
+1. Sign in at streamlit.io/cloud and create a new app.
+2. Point to this repo and branch, set `app.py` as the entry point.
+3. Add environment variables if you plan to send emails.
+
+
+SMTP CONFIG
+───────────────────────────────
+Copy `.env.example` to `.env` (or set values in your hosting platform) and fill in:
+- SMTP_HOST
+- SMTP_PORT
+- SMTP_USER
+- SMTP_PASSWORD
+- EMAIL_FROM
+
 
 ================================================================================
 PERFORMANCE TIPS
