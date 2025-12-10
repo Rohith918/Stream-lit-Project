@@ -1,5 +1,4 @@
 import streamlit as st
-from pathlib import Path
 
 _USERS = {
     "advisor1": "password123",
@@ -49,8 +48,6 @@ def render(navigate_to):
 
     if "login_error" not in st.session_state:
         st.session_state.login_error = None
-
-    logo_path = Path("templates/img/logo.png")
     center = st.columns([1, 2, 1])[1]
     with center:
         st.image("https://vcmgkywlwgq3twod.public.blob.vercel-storage.com/logo.jfif", use_column_width=True)
