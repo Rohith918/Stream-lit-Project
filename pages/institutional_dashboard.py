@@ -53,7 +53,6 @@ def risk_level_from_gpa(prior_gpa):
 def render(navigate_to):
     """Render Institutional Dashboard"""
 
-    # Header
     st.markdown("""
     <div class="header-container">
         <div class="header-title">🎓 Student Success Intelligence</div>
@@ -68,7 +67,7 @@ def render(navigate_to):
             navigate_to("institutional")
     with col2:
         if st.button("📈 Reports", use_container_width=True):
-            st.info("📋 Reports page coming soon!")
+            navigate_to("reports")
     with col3:
         if st.button("🔔 Alerts", use_container_width=True):
             navigate_to("alerts")

@@ -2,26 +2,32 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
-from pages._alerts_lib import get_alerts_for_student, acknowledge_alert
+from pages._alerts_lib import _ensure_alerts_state, get_alerts_for_student, acknowledge_alert
+from pages.advisor_dashboard import load_data, _prepare_student_dataset
 
-@st.cache_data
-def load_data():
-    """Load student data from CSV or return mock data"""
+
+def _safe_float(value, default=None):
+    """Return a float or the provided default without raising."""
+    if isinstance(value, pd.Series):
+        value = value.iloc[0] if len(value) > 0 else None
+    if value is None or pd.isna(value):
+        return default
     try:
-        df = pd.read_csv("./data/student_performance_dataset.csv")
-        if len(df) == 0:
-            raise ValueError("CSV is empty")
-        return df
-    except:
-        # Mock data fallback
-        return pd.DataFrame({
-            'student_id': ['S001', 'S002', 'S003', 'S004', 'S005', 'S006', 'S007', 'S008'],
-            'name': ['John Smith', 'Emily Davis', 'Michael Chen', 'Sarah Johnson', 'David Martinez', 'Jessica Williams', 'Alex Brown', 'Lisa Anderson'],
-            'major': ['Engineering', 'Business', 'Computer Science', 'Arts', 'Engineering', 'Business', 'Computer Science', 'Arts'],
-            'gpa': [2.1, 2.4, 2.8, 3.0, 3.2, 3.5, 2.9, 3.1],
-            'year': ['Junior', 'Sophomore', 'Senior', 'Junior', 'Senior', 'Junior', 'Sophomore', 'Senior'],
-            'credits': [78, 65, 110, 95, 120, 88, 72, 105],
-        })
+        converted = float(value)
+        return converted if not pd.isna(converted) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default=0):
+    """Return an int or default without raising."""
+    num = _safe_float(value, None)
+    if num is None:
+        return default
+    try:
+        return int(num)
+    except (TypeError, ValueError):
+        return default
 
 def get_student_data(student_id, df):
     """Get specific student data"""
@@ -49,9 +55,10 @@ def risk_level_from_gpa(gpa):
 
 def render(student_id, navigate_to):
     """Render Student Detail View"""
-    
+    _ensure_alerts_state()
+
     # Load data
-    df = load_data()
+    df = _prepare_student_dataset(load_data())
     student = get_student_data(student_id, df)
 
     if student is None:
@@ -60,7 +67,6 @@ def render(student_id, navigate_to):
             navigate_to("advisor")
         return
 
-    # Header
     st.markdown("""
     <div class="header-container">
         <div class="header-title">👤 Student Profile</div>
@@ -91,7 +97,7 @@ def render(student_id, navigate_to):
     # Student Header Info
     col1, col2, col3, col4, col5, col6 = st.columns([0.5, 2, 1.5, 1.5, 1.5, 1.5])
 
-    gpa_val = student.get('gpa', None) if isinstance(student, pd.Series) else None
+    gpa_val = _safe_float(student.get('gpa', None) if isinstance(student, pd.Series) else None, None)
     risk_level = risk_level_from_gpa(gpa_val)
     if risk_level == "High":
         badge_html = '<span class="risk-badge high">🔴 High Risk</span>'
@@ -116,11 +122,11 @@ def render(student_id, navigate_to):
         st.markdown(badge_html, unsafe_allow_html=True)
 
     with col3:
-        gpa_display = f"{float(student.get('gpa', 0.0)):.2f}" if pd.notna(student.get('gpa', None)) else "N/A"
+        gpa_display = f"{gpa_val:.2f}" if gpa_val is not None else "N/A"
         st.metric("GPA", gpa_display)
 
     with col4:
-        st.metric("Credits", int(student.get('credits', 0)))
+        st.metric("Credits", _safe_int(student.get('credits', 0)))
 
     with col5:
         st.metric("Year", student.get('year', ''))
@@ -146,17 +152,17 @@ def render(student_id, navigate_to):
         col1, col2, col3 = st.columns(3)
 
         # Safe GPA access
-        safe_gpa = student.get('gpa', None)
-        gpa_text = f"{float(safe_gpa):.2f}" if (safe_gpa is not None and pd.notna(safe_gpa)) else "N/A"
+        safe_gpa = gpa_val
+        gpa_text = f"{safe_gpa:.2f}" if safe_gpa is not None else "N/A"
 
         with col1:
             st.metric("Current GPA", gpa_text)
 
         with col2:
-            st.metric("Credits Completed", int(student.get('credits', 0)))
+            st.metric("Credits Completed", _safe_int(student.get('credits', 0)))
 
         with col3:
-            if safe_gpa is not None and pd.notna(safe_gpa):
+            if safe_gpa is not None:
                 academic_status = "Good Standing" if float(safe_gpa) >= 2.5 else "Academic Warning"
             else:
                 academic_status = "Unknown"
@@ -209,12 +215,12 @@ def render(student_id, navigate_to):
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            base_gpa = float(safe_gpa) if (safe_gpa is not None and pd.notna(safe_gpa)) else 2.5
+            base_gpa = safe_gpa if safe_gpa is not None else 2.5
             attendance_pct = min(100, max(50, int(75 + (base_gpa - 2.5) * 10)))
             st.metric("Attendance Rate", f"{attendance_pct}%")
 
         with col2:
-            base_gpa2 = float(safe_gpa) if (safe_gpa is not None and pd.notna(safe_gpa)) else 2.5
+            base_gpa2 = safe_gpa if safe_gpa is not None else 2.5
             engagement_score = min(100, max(20, int(60 + (base_gpa2 - 2.0) * 15)))
             st.metric("Engagement Score", engagement_score)
 

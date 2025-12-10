@@ -8,9 +8,8 @@ from typing import List, Dict, Tuple, Optional
 
 
 def _ensure_alerts_state() -> None:
-    """Ensure the session_state containers for alerts and interventions exist."""
     if 'notifications' not in st.session_state:
-        st.session_state['notifications'] = {}  # student_id -> list[dict]
+        st.session_state['notifications'] = {}
     if 'alert_acknowledged' not in st.session_state:
         st.session_state['alert_acknowledged'] = set()
     if 'interventions' not in st.session_state:
@@ -18,7 +17,6 @@ def _ensure_alerts_state() -> None:
 
 
 def add_alert(student_id: str, subject: str, message: str, advisor: str = 'Advisor') -> Dict:
-    """Add an in-app alert/notification for a student and return the note dict."""
     _ensure_alerts_state()
     note = {
         'subject': subject,
@@ -37,10 +35,6 @@ def get_alerts_for_student(student_id: str) -> List[Dict]:
 
 
 def acknowledge_alert(student_id: str, index: int) -> bool:
-    """Mark an alert acknowledged and optionally record an intervention entry.
-
-    Returns True if successful, False otherwise.
-    """
     _ensure_alerts_state()
     try:
         notes = st.session_state['notifications'].get(student_id, [])
@@ -48,8 +42,6 @@ def acknowledge_alert(student_id: str, index: int) -> bool:
             return False
         note = notes.pop(index)
         st.session_state['alert_acknowledged'].add(student_id)
-
-        # record a short intervention entry automatically
         intervention = {
             'type': 'Notification Acknowledged',
             'advisor': note.get('advisor', 'Advisor'),
@@ -62,21 +54,25 @@ def acknowledge_alert(student_id: str, index: int) -> bool:
         return False
 
 
-def send_email(to_address: str, subject: str, body: str) -> Tuple[bool, str]:
-    """Attempt to send an email using SMTP settings from environment variables.
+def is_email_configured() -> bool:
+    return all([
+        st.session_state.get('SMTP_HOST') or os.environ.get('SMTP_HOST'),
+        st.session_state.get('SMTP_PORT') or os.environ.get('SMTP_PORT'),
+        st.session_state.get('SMTP_USER') or os.environ.get('SMTP_USER'),
+        st.session_state.get('SMTP_PASSWORD') or os.environ.get('SMTP_PASSWORD'),
+        st.session_state.get('EMAIL_FROM') or os.environ.get('EMAIL_FROM'),
+    ])
 
-    If SMTP config is missing this returns (False, message) and does not raise.
-    Environment variables used:
-      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, EMAIL_FROM
-    """
-    smtp_host = os.environ.get('SMTP_HOST')
-    smtp_port = os.environ.get('SMTP_PORT')
-    smtp_user = os.environ.get('SMTP_USER')
-    smtp_pass = os.environ.get('SMTP_PASSWORD')
-    email_from = os.environ.get('EMAIL_FROM')
+
+def send_email(to_address: str, subject: str, body: str) -> Tuple[bool, str]:
+    smtp_host = st.session_state.get('SMTP_HOST') or os.environ.get('SMTP_HOST')
+    smtp_port = st.session_state.get('SMTP_PORT') or os.environ.get('SMTP_PORT')
+    smtp_user = st.session_state.get('SMTP_USER') or os.environ.get('SMTP_USER')
+    smtp_pass = st.session_state.get('SMTP_PASSWORD') or os.environ.get('SMTP_PASSWORD')
+    email_from = st.session_state.get('EMAIL_FROM') or os.environ.get('EMAIL_FROM')
 
     if not (smtp_host and smtp_port and smtp_user and smtp_pass and email_from):
-        return False, "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, EMAIL_FROM env vars to enable email sending."
+        return False, "SMTP not configured. Set SMTP credentials to enable email sending."
 
     try:
         port = int(smtp_port)

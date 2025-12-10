@@ -1,4 +1,5 @@
 import math
+import textwrap
 import streamlit as st
 import pandas as pd
 from pages.advisor_dashboard import load_data, synthesize_student_profile, compute_weighted_risk
@@ -43,36 +44,61 @@ def render(navigate_to):
 
     st.markdown("""
     <style>
+        .report-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 18px;
+            align-items: stretch;
+        }
         .report-card {
-            border-radius: 8px;
-            padding: 16px;
+            border-radius: 14px;
+            padding: 18px;
             border: 1px solid #E5E7EB;
-            background: #FFFFFF;
-            box-shadow: 0 6px 15px rgba(0, 40, 85, 0.08);
-            min-height: 120px;
+            background: linear-gradient(135deg, rgba(0,40,85,0.02), rgba(245,183,0,0.05));
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.12);
+            min-height: 190px;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .report-card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            pointer-events: none;
         }
         .report-card h4 {
             margin: 0;
-            color: #111827;
-            font-size: 1rem;
+            color: #0F172A;
+            font-size: 1.05rem;
+            font-weight: 700;
+        }
+        .report-id {
+            font-size: 12px;
+            color: #6B7280;
+            margin-top: 4px;
         }
         .report-chip {
             display: inline-flex;
             align-items: center;
-            padding: 2px 10px;
+            padding: 4px 12px;
             border-radius: 9999px;
             font-weight: 600;
             font-size: 12px;
-            margin-top: 6px;
+            margin-top: 10px;
         }
-        .report-chip.high { background: #FEE2E2; color: #B91C1C; }
-        .report-chip.medium { background: #FEF3C7; color: #B45309; }
-        .report-chip.low { background: #DCFCE7; color: #15803D; }
+        .chip-high { background: #FEE2E2; color: #991B1B; }
+        .chip-medium { background: #FEF3C7; color: #92400E; }
+        .chip-low { background: #DCFCE7; color: #065F46; }
         .report-summary {
             font-size: 13px;
-            color: #4B5563;
-            margin-top: 10px;
-            line-height: 1.4;
+            color: #1F2937;
+            margin-top: 12px;
+            line-height: 1.5;
+            flex: 1;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -141,26 +167,29 @@ def render(navigate_to):
         end = start + page_size
         page_records = records[start:end]
 
-        cols = st.columns(3)
         color_map = {
-            "High": "high",
-            "Medium": "medium",
-            "Low": "low"
+            "High": "chip-high",
+            "Medium": "chip-medium",
+            "Low": "chip-low"
         }
-        for idx, row in enumerate(page_records):
-            chip_class = color_map.get(row.get("Risk", "Low"), "low")
-            summary_html = f"""
+        cards = []
+        for row in page_records:
+            chip_class = color_map.get(row.get("Risk", "Low"), "chip-low")
+            display_name = row.get("Name") or row.get("Student ID", "Student")
+            summary_html = textwrap.dedent(f"""
             <div class="report-card">
-                <h4>{row.get('Student ID', 'Student')}</h4>
+                <h4>{display_name}</h4>
+                <div class="report-id">{row.get('Student ID', '')}</div>
                 <div class="report-chip {chip_class}">{row.get('Risk', 'Low')} Risk</div>
                 <div class="report-summary">{row.get('Summary', 'No summary')}</div>
             </div>
-            """
-            with cols[idx % 3]:
-                st.markdown(summary_html, unsafe_allow_html=True)
+            """).strip()
+            cards.append(summary_html)
+
+        st.markdown(f"<div class='report-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
     st.markdown("### Detailed Table")
-    st.dataframe(rep, use_container_width=True, hide_index=True)
+    st.dataframe(rep.drop(columns=['Name'], errors='ignore'), use_container_width=True, hide_index=True)
 
     csv = rep.to_csv(index=False).encode('utf-8')
     st.download_button("Download CSV", csv, file_name="risk_report.csv", mime="text/csv")

@@ -2,8 +2,25 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from datetime import datetime, timedelta
+from typing import Any
 from pages._alerts_lib import _ensure_alerts_state, add_alert, send_email, acknowledge_alert
 from utils.alert_logic import AlertSystem
+
+def _normalize_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure key columns exist even if source CSV uses alternate names."""
+    df = df.copy()
+    if 'gpa' not in df.columns:
+        if 'prior_gpa' in df.columns:
+            df['gpa'] = df['prior_gpa']
+        else:
+            df['gpa'] = None
+    if 'credits' not in df.columns:
+        if 'credits_completed' in df.columns:
+            df['credits'] = df['credits_completed']
+        else:
+            df['credits'] = 0
+    return df
+
 
 @st.cache_data
 def load_data():
@@ -12,8 +29,8 @@ def load_data():
         df = pd.read_csv("./data/student_performance_dataset.csv")
         if len(df) == 0:
             raise ValueError("CSV is empty")
-        return df
-    except:
+        return _normalize_dataset(df)
+    except Exception:
         # Mock data fallback
         return pd.DataFrame({
             'student_id': ['S001', 'S002', 'S003', 'S004', 'S005', 'S006', 'S007', 'S008'],
@@ -23,6 +40,80 @@ def load_data():
             'year': ['Junior', 'Sophomore', 'Senior', 'Junior', 'Senior', 'Junior', 'Sophomore', 'Senior'],
             'credits': [78, 65, 110, 95, 120, 88, 72, 105],
         })
+
+
+@st.cache_data
+def _prepare_student_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Return dataframe with synthesized attributes and risk flags, cached for speed."""
+    df = df.copy()
+    augmented = []
+    for _, row in df.iterrows():
+        profile = synthesize_student_profile(row)
+        score, label = compute_weighted_risk(profile, row.get('gpa', None))
+        flags = compute_indicator_flags(profile, row.get('gpa', None))
+        profile.update({
+            'risk_score': score,
+            'risk_label': label,
+            'risk_flags': str(flags)
+        })
+        augmented.append(profile)
+    profile_df = pd.DataFrame(augmented, index=df.index)
+    return pd.concat([df.reset_index(drop=True), profile_df.reset_index(drop=True)], axis=1)
+
+
+def _series_with_default(df: pd.DataFrame, column: str, default: Any) -> pd.Series:
+    """Return df[column] if present, otherwise a Series filled with default."""
+    if column in df.columns:
+        return df[column]
+    return pd.Series([default] * len(df), index=df.index)
+
+
+def _build_alert_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize dataframe columns so AlertSystem always gets the expected schema."""
+    if 'student_id' not in df.columns:
+        raise ValueError("student_id column required for alert generation")
+
+    sid = df['student_id']
+    names = _series_with_default(df, 'name', '').astype(str).str.strip()
+    names = names.where(names != "", sid)
+
+    return pd.DataFrame({
+        'student_id': sid,
+        'name': names,
+        'advisor': pd.Series(['Advisor'] * len(df), index=df.index),
+        'gpa': _series_with_default(df, 'gpa', None),
+        'credits': _series_with_default(df, 'credits', 0),
+        'warnings': _series_with_default(df, 'warnings_count', 0),
+        'unpaid_fees': _series_with_default(df, 'unpaid_fees', 0),
+        'financial_aid_status': _series_with_default(df, 'financial_aid_status', 'On time'),
+        'attendance': _series_with_default(df, 'attendance_pct', 90),
+        'counseling_visits': _series_with_default(df, 'counseling_visits', 0),
+        'engagement_score': _series_with_default(df, 'engagement_score', 60),
+    }, index=df.index)
+
+
+def _safe_float(value, default=None):
+    """Best-effort float conversion that never raises."""
+    if isinstance(value, pd.Series):
+        value = value.iloc[0] if not value.empty else None
+    if value is None or pd.isna(value):
+        return default
+    try:
+        converted = float(value)
+        return converted if not pd.isna(converted) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default=0):
+    """Best-effort integer conversion that never raises."""
+    num = _safe_float(value, None)
+    if num is None:
+        return default
+    try:
+        return int(num)
+    except (TypeError, ValueError):
+        return default
 
 def _seed_from_id(student_id: str) -> int:
     """Deterministic seed derived from student_id (stable across runs)."""
@@ -167,54 +258,23 @@ def render(navigate_to):
 
     st.divider()
 
-    # Load data
-    df = load_data()
-
-    # Synthesize additional attributes and compute risk for each student
-    for idx, r in df.iterrows():
-        profile = synthesize_student_profile(r)
-        score, label = compute_weighted_risk(profile, r.get('gpa', None))
-        flags = compute_indicator_flags(profile, r.get('gpa', None))
-        # add synthetic columns to dataframe
-        df.at[idx, 'attendance_pct'] = profile['attendance_pct']
-        df.at[idx, 'unpaid_fees'] = profile['unpaid_fees']
-        df.at[idx, 'counseling_visits'] = profile['counseling_visits']
-        df.at[idx, 'warnings_count'] = profile['warnings_count']
-        df.at[idx, 'financial_aid_status'] = profile['financial_aid_status']
-        df.at[idx, 'engagement_score'] = profile['engagement_score']
-        df.at[idx, 'gpa_drop'] = profile['gpa_drop']
-        df.at[idx, 'housing'] = profile['housing']
-        df.at[idx, 'study_hours'] = profile['study_hours']
-        df.at[idx, 'risk_score'] = score
-        df.at[idx, 'risk_label'] = label
-        df.at[idx, 'risk_flags'] = str(flags)
+    # Load data with cached synthetic metrics
+    df_raw = load_data()
+    df = _prepare_student_dataset(df_raw)
 
     # Generate in-app alerts from rule engine and enqueue them de-duplicated
     _ensure_alerts_state()
     if 'alerts_digest' not in st.session_state:
         st.session_state['alerts_digest'] = set()
 
+    students_with_alerts = []
     try:
-        # Prepare dataframe with expected columns for AlertSystem
-        df_for_alerts = pd.DataFrame({
-            'student_id': df['student_id'],
-            'name': df['name'] if 'name' in df.columns else df['student_id'],
-            'advisor': 'Advisor',
-            'gpa': df.get('gpa', pd.Series([None]*len(df))),
-            'credits': df.get('credits', pd.Series([0]*len(df))),
-            'warnings': df.get('warnings_count', pd.Series([0]*len(df))),
-            'unpaid_fees': df.get('unpaid_fees', pd.Series([0]*len(df))),
-            'financial_aid_status': df.get('financial_aid_status', pd.Series(['On time']*len(df))),
-            'attendance': df.get('attendance_pct', pd.Series([90]*len(df))),
-            'counseling_visits': df.get('counseling_visits', pd.Series([0]*len(df))),
-            'engagement_score': df.get('engagement_score', pd.Series([60]*len(df))),
-        })
-
+        df_for_alerts = _build_alert_dataframe(df)
         students_with_alerts, _ = AlertSystem.get_students_with_alerts(df_for_alerts)
         for s in students_with_alerts:
             sid = s.get('student_id')
             for a in s.get('alerts', []):
-                subj = f"{a.get('type')} - {a.get('severity').upper()}"
+                subj = f"{a.get('type')} - {a.get('severity', '').upper()}"
                 msg = a.get('message', '')
                 dedup_key = (sid, a.get('type'), a.get('severity'), msg)
                 if dedup_key in st.session_state['alerts_digest']:
@@ -223,7 +283,7 @@ def render(navigate_to):
                 st.session_state['alerts_digest'].add(dedup_key)
     except Exception:
         # Fail-safe: don't block dashboard if alert generation fails
-        pass
+        students_with_alerts = []
 
     # Ensure at least 3 students are flagged High so advisors always see multiple cases
     try:
@@ -270,6 +330,18 @@ def render(navigate_to):
         filtered_df['risk_level'] = filtered_df['risk_label']
         filtered_df = filtered_df[filtered_df['risk_level'] == risk_filter]
 
+    page_col, page_size_col = st.columns([2, 1])
+    with page_size_col:
+        page_size = st.selectbox("Students per page", [5, 10, 20], index=1, key="advisor_page_size")
+    total_pages = max(1, int((len(filtered_df) + page_size - 1) / page_size))
+    if "advisor_page" not in st.session_state:
+        st.session_state.advisor_page = 1
+    st.session_state.advisor_page = min(st.session_state.advisor_page, total_pages)
+    current_page = st.session_state.advisor_page
+    start_idx = (current_page - 1) * page_size
+    end_idx = start_idx + page_size
+    filtered_df = filtered_df.iloc[start_idx:end_idx]
+
     st.divider()
 
     # Quick Stats Row
@@ -296,24 +368,6 @@ def render(navigate_to):
     st.markdown("### 🔴 Risk Alerts")
 
     # Show top students with most critical alerts from rule engine where available
-    try:
-        df_for_alerts = pd.DataFrame({
-            'student_id': df['student_id'],
-            'name': df['name'] if 'name' in df.columns else df['student_id'],
-            'advisor': 'Advisor',
-            'gpa': df.get('gpa', pd.Series([None]*len(df))),
-            'credits': df.get('credits', pd.Series([0]*len(df))),
-            'warnings': df.get('warnings_count', pd.Series([0]*len(df))),
-            'unpaid_fees': df.get('unpaid_fees', pd.Series([0]*len(df))),
-            'financial_aid_status': df.get('financial_aid_status', pd.Series(['On time']*len(df))),
-            'attendance': df.get('attendance_pct', pd.Series([90]*len(df))),
-            'counseling_visits': df.get('counseling_visits', pd.Series([0]*len(df))),
-            'engagement_score': df.get('engagement_score', pd.Series([60]*len(df))),
-        })
-        students_with_alerts, _ = AlertSystem.get_students_with_alerts(df_for_alerts)
-    except Exception:
-        students_with_alerts = []
-
     if students_with_alerts:
         for idx, s in enumerate(students_with_alerts[:5]):
             name = s.get('name', s.get('student_id'))
@@ -359,14 +413,17 @@ def render(navigate_to):
         for idx, row in filtered_df.iterrows():
             # use synthesized attributes
             risk_level = row.get('risk_label', 'Medium')
-            attendance = int(row.get('attendance_pct', 0))
-            unpaid = float(row.get('unpaid_fees', 0))
+            attendance = _safe_int(row.get('attendance_pct'), 0)
+            unpaid = _safe_float(row.get('unpaid_fees'), 0.0)
             financial_aid = row.get('financial_aid_status', 'On time')
-            engagement = int(row.get('engagement_score', 50))
-            gpa_drop = float(row.get('gpa_drop', 0.0))
-            study_hours = int(row.get('study_hours', 0))
-            warnings = int(row.get('warnings_count', 0))
-            risk_score = int(row.get('risk_score', 0))
+            engagement = _safe_int(row.get('engagement_score'), 50)
+            gpa_drop = _safe_float(row.get('gpa_drop'), 0.0)
+            study_hours = _safe_int(row.get('study_hours'), 0)
+            warnings = _safe_int(row.get('warnings_count'), 0)
+            risk_score = _safe_int(row.get('risk_score'), 0)
+            gpa_value = _safe_float(row.get('gpa'), None)
+            gpa_display = f"{gpa_value:.2f}" if gpa_value is not None else "N/A"
+            credits_val = _safe_int(row.get('credits'), 0)
 
             # Risk badge colors
             if risk_level == "High":
@@ -399,7 +456,7 @@ def render(navigate_to):
             with col3:
                 st.markdown(f"""
                 <div style='font-size: 12px; line-height: 1.5;'>
-                    <strong>GPA:</strong> {row.get('gpa', 0):.2f}<br/>
+                    <strong>GPA:</strong> {gpa_display}<br/>
                     <strong>Attendance:</strong> {attendance}%<br/>
                     <strong>Unpaid Fees:</strong> <span style='color: {fin_color}; font-weight: bold;'>${unpaid:.0f}</span><br/>
                     <strong>Engagement:</strong> {engagement}
@@ -410,7 +467,7 @@ def render(navigate_to):
                 st.markdown(f"""
                 <div style='font-size: 12px; line-height: 1.5;'>
                     <strong>Risk Score:</strong> {risk_score}<br/>
-                    <strong>Credits:</strong> {int(row.get('credits', 0))}<br/>
+                    <strong>Credits:</strong> {credits_val}<br/>
                     <strong>Warnings:</strong> {warnings}
                 </div>
                 """, unsafe_allow_html=True)
@@ -420,6 +477,18 @@ def render(navigate_to):
                     navigate_to("student-detail", row['student_id'])
 
             st.divider()
+
+    nav_left, nav_center, nav_right = st.columns([1, 2, 1])
+    with nav_left:
+        if st.button("⬅️ Previous", disabled=current_page <= 1):
+            st.session_state.advisor_page = max(1, current_page - 1)
+            st.rerun()
+    with nav_center:
+        st.markdown(f"<div style='text-align:center; padding-top:10px;'>Page {current_page} of {total_pages}</div>", unsafe_allow_html=True)
+    with nav_right:
+        if st.button("Next ➡️", disabled=current_page >= total_pages):
+            st.session_state.advisor_page = min(total_pages, current_page + 1)
+            st.rerun()
 
     # Generate Report Button
     st.markdown("---")
