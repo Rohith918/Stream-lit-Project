@@ -489,10 +489,3 @@ def render(navigate_to):
         if st.button("Next ➡️", disabled=current_page >= total_pages):
             st.session_state.advisor_page = min(total_pages, current_page + 1)
             st.rerun()
-
-    # Generate Report Button
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        if st.button("📊 Generate Report", use_container_width=True):
-            st.info("📋 Report generation coming soon!")
