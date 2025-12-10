@@ -53,8 +53,7 @@ def render(navigate_to):
     logo_path = Path("templates/img/logo.png")
     center = st.columns([1, 2, 1])[1]
     with center:
-        if logo_path.exists():
-            st.image(str(logo_path), use_column_width=True)
+        st.image("https://vcmgkywlwgq3twod.public.blob.vercel-storage.com/logo.jfif", use_column_width=True)
         st.markdown("<div class='login-title-text'>Horizon State University</div>", unsafe_allow_html=True)
         st.markdown("<div class='login-subtitle-text'>Advisor Portal</div>", unsafe_allow_html=True)
 
